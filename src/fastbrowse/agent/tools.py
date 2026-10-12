@@ -31,21 +31,33 @@ async def get_page_url(runtime: ToolRuntime[BrowserContext, State]) -> str:
     return f"{page.url}\n{await page.title()}"
 
 
+def _locator(page, selector: str, frame_index: int = 0):
+    """Resolve a locator, piercing into the given frame when frame_index > 0."""
+    if frame_index and frame_index < len(page.frames):
+        return page.frames[frame_index].locator(selector).first
+    return page.locator(selector).first
+
+
 @tool
-async def click_element(selector: str, runtime: ToolRuntime[BrowserContext, State]) -> str:
-    """Click the first element matching the CSS `selector`."""
+async def click_element(
+    selector: str, runtime: ToolRuntime[BrowserContext, State], frame_index: int = 0
+) -> str:
+    """Click the first element matching the CSS `selector` (optionally inside `frame_index`)."""
     page = runtime.context["page"]
-    await page.locator(selector).first.click()
+    await _locator(page, selector, frame_index).click()
     return f"Clicked: {selector}"
 
 
 @tool
 async def fill_input(
-    selector: str, value: str, runtime: ToolRuntime[BrowserContext, State]
+    selector: str,
+    value: str,
+    runtime: ToolRuntime[BrowserContext, State],
+    frame_index: int = 0,
 ) -> str:
-    """Fill the form field matching the CSS `selector` with `value`."""
+    """Fill the form field matching the CSS `selector` (optionally inside `frame_index`) with `value`."""
     page = runtime.context["page"]
-    await page.locator(selector).first.fill(value)
+    await _locator(page, selector, frame_index).fill(value)
     return f"Filled {selector} with '{value}'"
 
 

@@ -10,6 +10,6 @@ from fastbrowse.config import settings
 def llm():
     return ChatOpenAI(
         api_key=SecretStr(settings.openai_api_key),
-        base_url=settings.openai_api_key,
+        base_url=settings.openai_base_url,
         model=settings.openai_model
     )
