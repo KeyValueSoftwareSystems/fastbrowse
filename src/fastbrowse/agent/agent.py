@@ -151,43 +151,70 @@ async def router(state: State, runtime: Runtime[BrowserContext]) -> Command:
     return Command(goto=response.choices["route"].choice)
 
 
+def _summarize(element: Element) -> dict:
+    return {
+        "index": element.index,
+        "tag": element.tag,
+        "selector": element.selector,
+        "text": element.text,
+        "frame_index": element.frame_index,
+    }
+
+
 async def find_element(state: State, runtime: Runtime[BrowserContext]) -> dict:
-    """Choose the snapshot element most relevant to the current state."""
+    """Binary-search the snapshot for the element most relevant to the current state."""
     elements = state.get("elements", [])
     if not elements:
         return {"selected_index": -1}
 
-    criteria: dict = {
-        f"el_{element.index}": {
-            "tag": element.tag,
-            "selector": element.selector,
-            "text": element.text,
-            "role": element.role,
-            "frame_index": element.frame_index,
-            "frame_url": element.frame_url,
-        }
-        for element in elements
-    }
-    criteria["none"] = "No element is relevant."
+    candidates: list[Element] = list(elements)
 
-    response = await decision().ainvoke(
-        {
-            "state": _decision_state(state),
-            "questions": {
-                "element": Choice(
-                    instructions=(
-                        "Which element is most relevant to act on next? Choose 'none' "
-                        "if no element applies."
-                    ),
-                    criteria=criteria,
-                )
-            },
-        }
-    )
-    chosen = response.choices["element"].choice
-    if chosen == "none":
-        return {"selected_index": -1}
-    return {"selected_index": int(chosen.removeprefix("el_"))}
+    while len(candidates) > 1:
+        mid = len(candidates) // 2
+        top = candidates[:mid]
+        bottom = candidates[mid:]
+
+        response = await decision().ainvoke(
+            {
+                "state": {
+                    **_decision_state(state),
+                    "candidates": [_summarize(element) for element in candidates],
+                },
+                "questions": {
+                    "half": Choice(
+                        instructions=(
+                            "You are narrowing down which candidate element is most "
+                            "relevant to the goal and observations. Each option keeps half "
+                            "the list. Pick the half more likely to contain the relevant "
+                            "element, or 'none' if no element is relevant."
+                        ),
+                        criteria={
+                            "none": "No element on the page is relevant; stop.",
+                            "top": {
+                                "half": "first half",
+                                "elements": [_summarize(element) for element in top],
+                            },
+                            "bottom": {
+                                "half": "second half",
+                                "elements": [_summarize(element) for element in bottom],
+                            },
+                        },
+                    )
+                },
+            }
+        )
+
+        chosen = response.choices["half"].choice
+        if chosen == "none":
+            return {"selected_index": -1}
+        if chosen == "bottom":
+            candidates = bottom
+        else:
+            candidates = top
+
+    if len(candidates) == 1:
+        return {"selected_index": candidates[0].index}
+    return {"selected_index": -1}
 
 
 async def _fill_text(state: State, element: Element) -> str:
