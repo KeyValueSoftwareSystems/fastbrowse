@@ -5,6 +5,10 @@ from typing import TypedDict
 from langgraph.runtime import get_runtime
 from playwright.async_api import Browser, Page, async_playwright
 
+from fastbrowse.logging import get_logger
+
+logger = get_logger("context")
+
 
 class BrowserContext(TypedDict):
     """Run-scoped LangGraph runtime context holding the Playwright browser handles.
@@ -19,9 +23,11 @@ class BrowserContext(TypedDict):
 
 async def build_context(*, headless: bool = True) -> BrowserContext:
     """Launch Playwright and build the runtime context (browser + fresh page)."""
+    logger.info("launching browser (headless=%s)", headless)
     playwright = await async_playwright().start()
     browser = await playwright.chromium.launch(headless=headless)
     page = await browser.new_page()
+    logger.info("browser ready")
     return {"browser": browser, "page": page}
 
 
@@ -30,6 +36,7 @@ async def destroy_context(context: BrowserContext) -> None:
     browser = context.get("browser")
     if browser is not None:
         await browser.close()
+        logger.info("browser closed")
 
 
 def current() -> BrowserContext:

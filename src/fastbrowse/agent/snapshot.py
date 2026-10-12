@@ -5,6 +5,10 @@ import json
 from playwright.async_api import Frame, Page
 from pydantic import BaseModel
 
+from fastbrowse.logging import get_logger
+
+logger = get_logger("snapshot")
+
 _INTERACTIVE_SELECTOR = "a, button, input, textarea, select, [role='button'], [role='link'], [role='textbox'], [role='checkbox'], [role='tab'], [role='menuitem'], [contenteditable='true']"
 
 _SNAPSHOT_SCRIPT = f"""
@@ -67,6 +71,7 @@ async def take_snapshot(page: Page) -> list[Element]:
     elements: list[Element] = []
     for frame_index, frame in enumerate(page.frames):
         raw = await _snapshot_frame(frame)
+        logger.debug("frame %d (%s) -> %d elements", frame_index, frame.url, len(raw))
         for item in raw:
             elements.append(
                 Element(
@@ -76,6 +81,11 @@ async def take_snapshot(page: Page) -> list[Element]:
                     **item,
                 )
             )
+    logger.info(
+        "snapshot captured %d elements across %d frames",
+        len(elements),
+        len(page.frames),
+    )
     return elements
 
 

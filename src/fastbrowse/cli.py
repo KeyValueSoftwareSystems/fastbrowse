@@ -4,6 +4,7 @@ import argparse
 import asyncio
 
 from fastbrowse.agent.agent import run
+from fastbrowse.logging import setup_logging
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -25,6 +26,7 @@ async def _run(prompt: str, url: str, headed: bool) -> None:
 
 
 def main(argv: list[str] | None = None) -> None:
+    setup_logging()
     args = _parser().parse_args(argv)
     asyncio.run(_run(args.prompt, args.url, args.headed))
 

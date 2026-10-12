@@ -19,6 +19,9 @@ from fastbrowse.agent.context import BrowserContext, build_context, destroy_cont
 from fastbrowse.agent.snapshot import Element, take_snapshot
 from fastbrowse.agent.state import State
 from fastbrowse.agent.tools import click_element, fill_input, scroll_page
+from fastbrowse.logging import get_logger, log_decision, setup_logging
+
+logger = get_logger("agent")
 
 _PLAN_SYSTEM = (
     "You are the planning module of a web-browsing agent. Given the user's task, "
@@ -67,44 +70,53 @@ async def navigate(state: State, runtime: Runtime[BrowserContext]) -> dict:
     page = runtime.context["page"]
     urls = sorted(state.get("urls", set()))
     if not urls:
+        logger.info("navigate: no urls in state, staying")
         return {}
 
     if len(urls) == 1:
         target = urls[0]
         if page.url != target:
+            logger.info("navigate: single url -> %s", target)
             await page.goto(target, wait_until="load")
+        else:
+            logger.info("navigate: already at %s", target)
         return {}
 
-    response = await decision().ainvoke(
-        {
-            "state": {**_decision_state(state), "urls": urls},
-            "questions": {
-                "url": Choice(
-                    instructions=(
-                        "Which URL should the agent navigate to next to best serve the "
-                        "current goal, or choose 'none' to stay on the current page?"
-                    ),
-                    criteria={
-                        **{url: f"Navigate to {url}" for url in urls},
-                        "none": "Stay on the current page.",
-                    },
-                )
-            },
-        }
-    )
+    request = {
+        "state": {**_decision_state(state), "urls": urls},
+        "questions": {
+            "url": Choice(
+                instructions=(
+                    "Which URL should the agent navigate to next to best serve the "
+                    "current goal, or choose 'none' to stay on the current page?"
+                ),
+                criteria={
+                    **{url: f"Navigate to {url}" for url in urls},
+                    "none": "Stay on the current page.",
+                },
+            )
+        },
+    }
+    response = await decision().ainvoke(request)
+    log_decision(logger, "navigate", request, response)
     chosen = response.choices["url"].choice
     if chosen != "none" and page.url != chosen:
+        logger.info("navigate: -> %s", chosen)
         await page.goto(chosen, wait_until="load")
+    else:
+        logger.info("navigate: staying on %s", page.url)
     return {}
 
 
 async def snapshot(state: State, runtime: Runtime[BrowserContext]) -> dict:
     """Capture an aria snapshot and the interactive elements into state."""
     page = runtime.context["page"]
-    return {
-        "snapshot": await page.aria_snapshot(),
-        "elements": await take_snapshot(page),
-    }
+    aria = await page.aria_snapshot()
+    elements = await take_snapshot(page)
+    logger.info(
+        "snapshot: %d aria chars, %d elements", len(aria), len(elements)
+    )
+    return {"snapshot": aria, "elements": elements}
 
 
 async def plan(state: State, runtime: Runtime[BrowserContext]) -> dict:
@@ -122,33 +134,36 @@ async def plan(state: State, runtime: Runtime[BrowserContext]) -> dict:
             ),
         ]
     )
+    logger.info("plan: goal=%r plan=%r", update.current_goal, update.plan)
     return {"plan": update.plan, "current_goal": update.current_goal}
 
 
 async def router(state: State, runtime: Runtime[BrowserContext]) -> Command:
     """Decide the next step and route the graph accordingly."""
-    response = await decision().ainvoke(
-        {
-            "state": _decision_state(state),
-            "questions": {
-                "route": Choice(
-                    instructions=(
-                        "Given the goal, plan, and observations, what should the agent "
-                        "do next?"
+    request = {
+        "state": _decision_state(state),
+        "questions": {
+            "route": Choice(
+                instructions=(
+                    "Given the goal, plan, and observations, what should the agent "
+                    "do next?"
+                ),
+                criteria={
+                    "find_element": (
+                        "Locate the most relevant element on the current page and "
+                        "act on it."
                     ),
-                    criteria={
-                        "find_element": (
-                            "Locate the most relevant element on the current page and "
-                            "act on it."
-                        ),
-                        "navigate": "Go back and navigate to a different URL.",
-                        "__end__": "The goal has been achieved; stop.",
-                    },
-                )
-            },
-        }
-    )
-    return Command(goto=response.choices["route"].choice)
+                    "navigate": "Go back and navigate to a different URL.",
+                    "__end__": "The goal has been achieved; stop.",
+                },
+            )
+        },
+    }
+    response = await decision().ainvoke(request)
+    log_decision(logger, "router", request, response)
+    route = response.choices["route"].choice
+    logger.info("router: -> %s", route)
+    return Command(goto=route)
 
 
 def _summarize(element: Element) -> dict:
@@ -168,44 +183,53 @@ async def find_element(state: State, runtime: Runtime[BrowserContext]) -> dict:
         return {"selected_index": -1}
 
     candidates: list[Element] = list(elements)
+    step = 0
 
     while len(candidates) > 1:
+        step += 1
         mid = len(candidates) // 2
         top = candidates[:mid]
         bottom = candidates[mid:]
 
-        response = await decision().ainvoke(
-            {
-                "state": {
-                    **_decision_state(state),
-                    "candidates": [_summarize(element) for element in candidates],
-                },
-                "questions": {
-                    "half": Choice(
-                        instructions=(
-                            "You are narrowing down which candidate element is most "
-                            "relevant to the goal and observations. Each option keeps half "
-                            "the list. Pick the half more likely to contain the relevant "
-                            "element, or 'none' if no element is relevant."
-                        ),
-                        criteria={
-                            "none": "No element on the page is relevant; stop.",
-                            "top": {
-                                "half": "first half",
-                                "elements": [_summarize(element) for element in top],
-                            },
-                            "bottom": {
-                                "half": "second half",
-                                "elements": [_summarize(element) for element in bottom],
-                            },
+        request = {
+            "state": {
+                **_decision_state(state),
+                "candidates": [_summarize(element) for element in candidates],
+            },
+            "questions": {
+                "half": Choice(
+                    instructions=(
+                        "You are narrowing down which candidate element is most "
+                        "relevant to the goal and observations. Each option keeps half "
+                        "the list. Pick the half more likely to contain the relevant "
+                        "element, or 'none' if no element is relevant."
+                    ),
+                    criteria={
+                        "none": "No element on the page is relevant; stop.",
+                        "top": {
+                            "half": "first half",
+                            "elements": [_summarize(element) for element in top],
                         },
-                    )
-                },
-            }
-        )
+                        "bottom": {
+                            "half": "second half",
+                            "elements": [_summarize(element) for element in bottom],
+                        },
+                    },
+                )
+            },
+        }
+        response = await decision().ainvoke(request)
+        log_decision(logger, f"find_element[{step}]", request, response)
 
         chosen = response.choices["half"].choice
+        logger.info(
+            "find_element: step %d candidates=%d -> %s",
+            step,
+            len(candidates),
+            chosen,
+        )
         if chosen == "none":
+            logger.info("find_element: no relevant element")
             return {"selected_index": -1}
         if chosen == "bottom":
             candidates = bottom
@@ -213,6 +237,7 @@ async def find_element(state: State, runtime: Runtime[BrowserContext]) -> dict:
             candidates = top
 
     if len(candidates) == 1:
+        logger.info("find_element: selected index=%d", candidates[0].index)
         return {"selected_index": candidates[0].index}
     return {"selected_index": -1}
 
@@ -239,32 +264,33 @@ async def action(state: State, runtime: Runtime[BrowserContext]) -> dict:
     index = state.get("selected_index", -1)
     element = next((e for e in elements if e.index == index), None)
 
-    response = await decision().ainvoke(
-        {
-            "state": {
-                **_decision_state(state),
-                "element": element.model_dump() if element else None,
-            },
-            "questions": {
-                "tool": Choice(
-                    instructions=(
-                        "Which action should be performed on the selected element (or "
-                        "the page)?"
-                    ),
-                    criteria={
-                        "click": "Click the selected element.",
-                        "fill": "Type text into the selected element.",
-                        "scroll": "Scroll the page.",
-                        "none": "Take no action.",
-                    },
-                )
-            },
-        }
-    )
+    request = {
+        "state": {
+            **_decision_state(state),
+            "element": element.model_dump() if element else None,
+        },
+        "questions": {
+            "tool": Choice(
+                instructions=(
+                    "Which action should be performed on the selected element (or "
+                    "the page)?"
+                ),
+                criteria={
+                    "click": "Click the selected element.",
+                    "fill": "Type text into the selected element.",
+                    "scroll": "Scroll the page.",
+                    "none": "Take no action.",
+                },
+            )
+        },
+    }
+    response = await decision().ainvoke(request)
+    log_decision(logger, "action", request, response)
     tool_name = response.choices["tool"].choice
 
     if tool_name in ("click", "fill") and element is None:
         note = f"{tool_name} skipped: no element selected"
+        logger.info("action: %s", note)
         return {"observations": _append(state.get("observations", ""), note)}
 
     tool_runtime = _tool_runtime(state, runtime)
@@ -288,6 +314,7 @@ async def action(state: State, runtime: Runtime[BrowserContext]) -> dict:
         result = "No action taken."
 
     observation = f"{tool_name} -> {result}"
+    logger.info("action: %s", observation)
     return {
         "observations": _append(state.get("observations", ""), observation),
         "messages": [AIMessage(content=observation)],
@@ -322,6 +349,8 @@ def build_graph():
 
 async def run(prompt: str, url: str, *, headless: bool = True) -> dict:
     """Run the browser agent on a prompt starting at a URL, returning the final state."""
+    setup_logging()
+    logger.info("run start | url=%s prompt=%r", url, prompt)
     context = await build_context(headless=headless)
     try:
         result = await build_graph().ainvoke(
@@ -331,4 +360,9 @@ async def run(prompt: str, url: str, *, headless: bool = True) -> dict:
         )
     finally:
         await destroy_context(context)
+    logger.info(
+        "run end | goal=%r observations=%d chars",
+        result.get("current_goal"),
+        len(result.get("observations", "")),
+    )
     return result
