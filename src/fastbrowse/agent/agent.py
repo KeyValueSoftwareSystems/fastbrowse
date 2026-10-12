@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import uuid
+
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_typesafe import Choice
+from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from langgraph.config import get_config
 from langgraph.graph import END, START, StateGraph
 from langgraph.prebuilt import ToolRuntime
@@ -11,7 +15,7 @@ from pydantic import BaseModel
 
 from fastbrowse.adapter.decision import decision
 from fastbrowse.adapter.llm import llm
-from fastbrowse.agent.context import BrowserContext
+from fastbrowse.agent.context import BrowserContext, build_context, destroy_context
 from fastbrowse.agent.snapshot import Element, take_snapshot
 from fastbrowse.agent.state import State
 from fastbrowse.agent.tools import click_element, fill_input, scroll_page
@@ -263,6 +267,11 @@ async def action(state: State, runtime: Runtime[BrowserContext]) -> dict:
     }
 
 
+_checkpointer = InMemorySaver(
+    serde=JsonPlusSerializer(allowed_msgpack_modules=[Element])
+)
+
+
 def build_graph():
     """Assemble and compile the browser-agent StateGraph."""
     graph = StateGraph(State, context_schema=BrowserContext)
@@ -281,4 +290,18 @@ def build_graph():
     graph.add_edge("find_element", "action")
     graph.add_edge("action", "snapshot")
 
-    return graph.compile()
+    return graph.compile(checkpointer=_checkpointer)
+
+
+async def run(prompt: str, url: str, *, headless: bool = True) -> dict:
+    """Run the browser agent on a prompt starting at a URL, returning the final state."""
+    context = await build_context(headless=headless)
+    try:
+        result = await build_graph().ainvoke(
+            {"prompt": prompt, "urls": {url}},
+            config={"configurable": {"thread_id": uuid.uuid4().hex}},
+            context=context,
+        )
+    finally:
+        await destroy_context(context)
+    return result

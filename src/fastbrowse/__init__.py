@@ -1,2 +1,3 @@
-def main() -> None:
-    print("Hello from fastbrowse!")
+from fastbrowse.cli import main
+
+__all__ = ["main"]
