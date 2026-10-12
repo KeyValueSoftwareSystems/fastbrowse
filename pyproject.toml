@@ -1,0 +1,23 @@
+[project]
+name = "fastbrowse"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "milan", email = "milan@keyvalue.systems" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "langchain-openai>=1.7.0",
+    "langchain-typesafe>=0.0.1a3",
+    "langgraph>=1.2.14",
+    "playwright>=1.63.0",
+    "pydantic-settings>=2.15.0",
+]
+
+[project.scripts]
+fastbrowse = "fastbrowse:main"
+
+[build-system]
+requires = ["uv_build>=0.12.2,<0.13.0"]
+build-backend = "uv_build"
