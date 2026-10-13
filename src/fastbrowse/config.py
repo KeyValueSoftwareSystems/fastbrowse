@@ -18,5 +18,8 @@ class Settings(BaseSettings):
     typesafe_base_url: str = ""
     typesafe_model: str = ""
 
+    netra_otlp_endpoint: str = ""
+    netra_api_key: str = ""
+
 
 settings = Settings()

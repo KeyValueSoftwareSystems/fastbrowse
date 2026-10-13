@@ -11,6 +11,8 @@ from langgraph.graph import START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.runtime import Runtime
 from langgraph.types import Command
+from netra import Netra  # type: ignore[import-untyped]
+from netra.decorators import workflow  # type: ignore[import-untyped]
 from pydantic import BaseModel
 
 from fastbrowse.adapter.llm import llm
@@ -43,52 +45,55 @@ class PlanUpdate(BaseModel):
     current_goal: str
 
 
+@workflow  # type: ignore[untyped-decorator]
 async def navigate(state: State, runtime: Runtime[BrowserContext]) -> dict[str, Any]:
     """Navigate to a URL chosen from state, or stay on the current page."""
     page = runtime.context["page"]
     urls = sorted(state.get("urls", set()))
+    Netra.set_input({"urls": urls, "current_url": page.url})
+
     if not urls:
         logger.info("navigate: no urls in state, staying")
-        return {}
-
-    if len(urls) == 1:
+    elif len(urls) == 1:
         target = urls[0]
         if page.url != target:
             logger.info("navigate: single url -> %s", target)
             await goto(page, target)
         else:
             logger.info("navigate: already at %s", target)
-        return {}
-
-    chosen = await classify(
-        "navigate",
-        state,
-        "url",
-        Choice(
-            instructions=NAVIGATE_INSTRUCTION,
-            criteria={
-                **{url: f"Navigate to {url}" for url in urls},
-                "none": "Stay on the current page.",
-            },
-        ),
-        extra={"urls": urls},
-    )
-    if chosen != "none" and page.url != chosen:
-        logger.info("navigate: -> %s", chosen)
-        await goto(page, chosen)
     else:
-        logger.info("navigate: staying on %s", page.url)
+        chosen = await classify(
+            "navigate",
+            state,
+            "url",
+            Choice(
+                instructions=NAVIGATE_INSTRUCTION,
+                criteria={
+                    **{url: f"Navigate to {url}" for url in urls},
+                    "none": "Stay on the current page.",
+                },
+            ),
+            extra={"urls": urls},
+        )
+        if chosen != "none" and page.url != chosen:
+            logger.info("navigate: -> %s", chosen)
+            await goto(page, chosen)
+        else:
+            logger.info("navigate: staying on %s", page.url)
+
+    Netra.set_output({"url": page.url})
     return {}
 
 
+@workflow  # type: ignore[untyped-decorator]
 async def snapshot(state: State, runtime: Runtime[BrowserContext]) -> dict[str, Any]:
     """Capture an aria snapshot and the interactive elements into state."""
     page = runtime.context["page"]
+    Netra.set_input({"url": page.url})
     aria = await page.aria_snapshot()
     elements = await take_snapshot(page)
-    logger.info(
-        "snapshot: %d aria chars, %d elements", len(aria), len(elements)
-    )
+    logger.info("snapshot: %d aria chars, %d elements", len(aria), len(elements))
+    Netra.set_output({"snapshot_chars": len(aria), "elements": len(elements)})
     return {"snapshot": aria, "elements": elements}
 
 
@@ -121,50 +126,71 @@ def _next_goal(plan_items: list[str], completed: list[bool]) -> str:
     return plan_items[nxt] if nxt < len(plan_items) else ""
 
 
+@workflow  # type: ignore[untyped-decorator]
 async def plan(state: State, runtime: Runtime[BrowserContext]) -> dict[str, Any]:
     """Advance the plan: rewrite it when needed, otherwise move to the next goal."""
     plan_items = state.get("plan", [])
+    Netra.set_input(
+        {
+            "task": state.get("prompt", ""),
+            "goal": state.get("current_goal", ""),
+            "plan": plan_items,
+            "observations": state.get("observations", ""),
+        }
+    )
+
     if not plan_items:
-        return await _generate_plan(state)
-
-    questions: dict[str, Question] = {
-        "needs_update": Noul(
-            instructions=PLAN_UPDATE_INSTRUCTION,
-            criteria=NoulCriteria(
-                true="The plan must be rewritten.",
-                false="The plan still holds.",
-            ),
-        ),
-        **{
-            f"done_{i}": Noul(
-                instructions=PLAN_ITEM_DONE_INSTRUCTION.format(item=item),
+        result = await _generate_plan(state)
+    else:
+        questions: dict[str, Question] = {
+            "needs_update": Noul(
+                instructions=PLAN_UPDATE_INSTRUCTION,
                 criteria=NoulCriteria(
-                    true="The item is completed.",
-                    false="The item is not completed.",
+                    true="The plan must be rewritten.",
+                    false="The plan still holds.",
                 ),
-            )
-            for i, item in enumerate(plan_items)
-        },
-    }
-    response = await ask("plan", state, questions)
+            ),
+            **{
+                f"done_{i}": Noul(
+                    instructions=PLAN_ITEM_DONE_INSTRUCTION.format(item=item),
+                    criteria=NoulCriteria(
+                        true="The item is completed.",
+                        false="The item is not completed.",
+                    ),
+                )
+                for i, item in enumerate(plan_items)
+            },
+        }
+        response = await ask("plan", state, questions)
 
-    if response.nouls["needs_update"].noul >= UPDATE_T:
-        logger.info("plan: needs update, rewriting")
-        return await _generate_plan(state)
+        if response.nouls["needs_update"].noul >= UPDATE_T:
+            logger.info("plan: needs update, rewriting")
+            result = await _generate_plan(state)
+        else:
+            completed = [
+                response.nouls[f"done_{i}"].noul >= DONE_T
+                for i in range(len(plan_items))
+            ]
+            goal = _next_goal(plan_items, completed)
+            logger.info("plan: completed=%s goal=%r", completed, goal)
+            result = {"current_goal": goal}
 
-    completed = [
-        response.nouls[f"done_{i}"].noul >= DONE_T
-        for i in range(len(plan_items))
-    ]
-    goal = _next_goal(plan_items, completed)
-    logger.info("plan: completed=%s goal=%r", completed, goal)
-    return {"current_goal": goal}
+    Netra.set_output(result)
+    return result
 
 
+@workflow  # type: ignore[untyped-decorator]
 async def router(
     state: State, runtime: Runtime[BrowserContext]
 ) -> Command[str]:
     """Decide the next step and route the graph accordingly."""
+    Netra.set_input(
+        {
+            "goal": state.get("current_goal", ""),
+            "plan": state.get("plan", []),
+            "observations": state.get("observations", ""),
+        }
+    )
     route = await classify(
         "router",
         state,
@@ -182,16 +208,32 @@ async def router(
         ),
     )
     logger.info("router: -> %s", route)
+    Netra.set_output({"route": route})
     return Command(goto=route)
 
 
+@workflow  # type: ignore[untyped-decorator]
 async def find_element(
     state: State, runtime: Runtime[BrowserContext]
 ) -> dict[str, Any]:
     """Binary-search the snapshot for the element most relevant to the current state."""
     elements = state.get("elements", [])
+    Netra.set_input(
+        {
+            "goal": state.get("current_goal", ""),
+            "element_count": len(elements),
+        }
+    )
+    selected = await _search_element(state, elements)
+    result = {"selected_index": selected}
+    Netra.set_output(result)
+    return result
+
+
+async def _search_element(state: State, elements: list[Element]) -> int:
+    """Binary-search `elements` for the index most relevant to the current state."""
     if not elements:
-        return {"selected_index": -1}
+        return -1
 
     candidates: list[Element] = list(elements)
     step = 0
@@ -232,7 +274,7 @@ async def find_element(
         )
         if chosen == "none":
             logger.info("find_element: no relevant element")
-            return {"selected_index": -1}
+            return -1
         if chosen == "bottom":
             candidates = bottom
         else:
@@ -240,8 +282,8 @@ async def find_element(
 
     if len(candidates) == 1:
         logger.info("find_element: selected index=%d", candidates[0].index)
-        return {"selected_index": candidates[0].index}
-    return {"selected_index": -1}
+        return candidates[0].index
+    return -1
 
 
 async def _fill_text(state: State, element: Element) -> str:
@@ -280,11 +322,19 @@ async def _run_action(
     return "No action taken."
 
 
+@workflow  # type: ignore[untyped-decorator]
 async def action(state: State, runtime: Runtime[BrowserContext]) -> dict[str, Any]:
     """Pick a tool for the selected element, run it, and record an observation."""
     elements = state.get("elements", [])
     index = state.get("selected_index", -1)
     element = next((e for e in elements if e.index == index), None)
+    Netra.set_input(
+        {
+            "goal": state.get("current_goal", ""),
+            "selected_index": index,
+            "element": summarize(element) if element else None,
+        }
+    )
 
     tool_name = await classify(
         "action",
@@ -302,36 +352,39 @@ async def action(state: State, runtime: Runtime[BrowserContext]) -> dict[str, An
         extra={"element": element.model_dump() if element else None},
     )
 
+    result: dict[str, Any]
     if tool_name in ("click", "fill") and element is None:
         note = f"{tool_name} skipped: no element selected"
         logger.info("action: %s", note)
-        return {"observations": append(state.get("observations", ""), note)}
+        result = {"observations": append(state.get("observations", ""), note)}
+        observation = note
+    else:
+        tool_result = await _run_action(state, runtime, element, tool_name)
+        observation = f"{tool_name} -> {tool_result}"
+        logger.info("action: %s", observation)
+        result = {
+            "observations": append(state.get("observations", ""), observation),
+            "messages": [AIMessage(content=observation)],
+        }
 
-    result = await _run_action(state, runtime, element, tool_name)
-
-    observation = f"{tool_name} -> {result}"
-    logger.info("action: %s", observation)
-    return {
-        "observations": append(state.get("observations", ""), observation),
-        "messages": [AIMessage(content=observation)],
-    }
+    Netra.set_output({"observation": observation})
+    return result
 
 
 _checkpointer = InMemorySaver(
     serde=JsonPlusSerializer(allowed_msgpack_modules=[Element])
 )
 
-
 def build_graph() -> CompiledStateGraph[State, BrowserContext, State, State]:
     """Assemble and compile the browser-agent StateGraph."""
     graph = StateGraph(State, context_schema=BrowserContext)
 
-    graph.add_node("navigate", navigate)
-    graph.add_node("snapshot", snapshot)
-    graph.add_node("plan", plan)
-    graph.add_node("router", router)
-    graph.add_node("find_element", find_element)
-    graph.add_node("action", action)
+    graph.add_node("navigate", navigate) #type: ignore
+    graph.add_node("snapshot", snapshot) #type: ignore
+    graph.add_node("plan", plan) #type: ignore
+    graph.add_node("router", router) #type: ignore
+    graph.add_node("find_element", find_element) #type: ignore
+    graph.add_node("action", action) #type: ignore
 
     graph.add_edge(START, "navigate")
     graph.add_edge("navigate", "snapshot")
@@ -342,7 +395,7 @@ def build_graph() -> CompiledStateGraph[State, BrowserContext, State, State]:
 
     return graph.compile(checkpointer=_checkpointer)
 
-
+@workflow(name="Fastbrowse")
 async def run(prompt: str, url: str, *, headless: bool = True) -> dict[str, Any]:
     """Run the browser agent on a prompt starting at a URL, returning the final state."""
     setup_logging()
