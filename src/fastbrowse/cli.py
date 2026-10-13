@@ -23,6 +23,8 @@ async def _run(prompt: str, url: str, headed: bool) -> None:
     print("PLAN:", result.get("plan"))
     print("OBSERVATIONS:")
     print(result.get("observations", ""))
+    print("ANSWER:")
+    print(result.get("answer", ""))
 
 
 def main(argv: list[str] | None = None) -> None:

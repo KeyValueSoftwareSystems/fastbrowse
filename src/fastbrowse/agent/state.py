@@ -17,4 +17,4 @@ class State(TypedDict):
     prompt: str
     snapshot: str
     elements: list[Element]
-    selected_index: int
+    answer: str

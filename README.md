@@ -16,18 +16,20 @@ flowchart TD
     START([START]) --> navigate
     navigate --> snapshot
     snapshot --> plan
-    plan --> router
-    router -->|find_element| find_element
-    router -->|navigate| navigate
-    router -->|end| END([END])
-    find_element --> action
-    action --> snapshot
+    plan --> act
+    act -->|"click / fill / scroll"| snapshot
+    act -->|navigate| navigate
+    act -->|answer| answer
+    answer --> END([END])
 ```
 
 The planning node asks the chat model for a structured `PlanUpdate` (an ordered
-plan plus the single goal to pursue next). The router and the element search both
-ask the TypeSafe decision model a single-choice question, and the action node
-asks which browser action to perform.
+plan plus the single goal to pursue next). The `act` node sends a **single**
+TypeSafe request per cycle carrying the operation (`click` / `fill` / `scroll` /
+`navigate` / `answer`) plus one speculative target head per offered operation
+(`click_target`, `fill_target`); only the head matching the chosen operation is
+executed. When the task is complete, `act` routes to the `answer` node, which asks
+the chat model for the final answer.
 
 ### Nodes
 
@@ -36,9 +38,8 @@ asks which browser action to perform.
 | `navigate` | Choose a URL (via the decision model when several are queued) and navigate the page. |
 | `snapshot` | Capture an aria snapshot and the interactive elements across every frame into state. |
 | `plan` | Ask the chat model for an updated plan and current goal. |
-| `router` | Ask the decision model what to do next: `find_element`, `navigate`, or end. |
-| `find_element` | Binary-search the element list for the one most relevant to the goal. |
-| `action` | Pick an action (`click`, `fill`, `scroll`, `none`) and run it against the page. |
+| `act` | One decision request: pick an operation and its target, run it, then loop or route to `navigate`/`answer`. |
+| `answer` | Ask the chat model for the final answer from the goal, page text, and observations, then end. |
 
 ## Requirements
 
@@ -125,11 +126,11 @@ The graph state (`agent/state.py`) is a `TypedDict`:
 | `urls` | Candidate URLs to navigate to. |
 | `snapshot` | Latest aria snapshot text. |
 | `elements` | Interactive `Element`s captured from the page. |
-| `selected_index` | Index of the element chosen by `find_element`. |
 | `plan` | Current ordered plan. |
 | `current_goal` | The single goal being pursued. |
 | `observations` | Accumulated action results. |
 | `messages` | LangChain messages (reducer-accumulated). |
+| `answer` | Final answer produced by the `answer` node. |
 
 ## Development
 

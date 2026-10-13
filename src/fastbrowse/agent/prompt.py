@@ -40,18 +40,20 @@ NAVIGATE_INSTRUCTION = (
     "current goal, or choose 'none' to stay on the current page?"
 )
 
-ROUTER_INSTRUCTION = (
-    "Given the goal, plan, and observations, what should the agent do next?"
+ACT_INSTRUCTION = (
+    "Given the goal, plan, and observations, what should the agent do next on the "
+    "current page: click an element, type into a field, scroll, navigate to another "
+    "URL, or finish and answer?"
 )
 
-FIND_ELEMENT_INSTRUCTION = (
-    "You are narrowing down which candidate element is most relevant to the goal "
-    "and observations. Each option keeps half the list. Pick the half more likely "
-    "to contain the relevant element, or 'none' if no element is relevant."
+CLICK_TARGET_INSTRUCTION = (
+    "If the next action is to click, which clickable element is most relevant to the "
+    "goal? Choose one of the offered element indices."
 )
 
-ACTION_INSTRUCTION = (
-    "Which action should be performed on the selected element (or the page)?"
+FILL_TARGET_INSTRUCTION = (
+    "If the next action is to type, which field is most relevant to the goal? Choose "
+    "one of the offered field indices."
 )
 
 PLAN_UPDATE_INSTRUCTION = (
@@ -62,4 +64,12 @@ PLAN_UPDATE_INSTRUCTION = (
 
 PLAN_ITEM_DONE_INSTRUCTION = (
     "Has the following plan item been completed, based on the observations?\n{item}"
+)
+
+ANSWER_SYSTEM = (
+    "You are the final-answer module of a web-browsing agent. Given the goal, the "
+    "page text, and the observations recorded while acting, write a concise, direct "
+    "answer to the goal. Use only information gathered in the observations and page "
+    "text; do not invent details. If the task could not be completed, say so and "
+    "explain briefly why."
 )

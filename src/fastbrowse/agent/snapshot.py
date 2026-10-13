@@ -34,6 +34,16 @@ _SNAPSHOT_SCRIPT = f"""
     }}
     return parts.join(' > ');
   }}
+  function actionKind(el) {{
+    const tag = el.tagName.toLowerCase();
+    if (tag === 'textarea') return 'fill';
+    if (tag === 'input') {{
+      const t = (el.getAttribute('type') || 'text').toLowerCase();
+      if (['text','search','email','url','tel','password','number'].includes(t)) return 'fill';
+    }}
+    if (el.isContentEditable) return 'fill';
+    return 'click';
+  }}
   return nodes.map((el) => ({{
     tag: el.tagName.toLowerCase(),
     selector: cssPath(el),
@@ -45,6 +55,7 @@ _SNAPSHOT_SCRIPT = f"""
       ''
     ).trim().slice(0, 200) || null,
     role: el.getAttribute('role'),
+    kind: actionKind(el),
   }}));
 }}
 """
@@ -60,6 +71,7 @@ class Element(BaseModel):
     selector: str
     text: str | None = None
     role: str | None = None
+    kind: str = "click"
 
 
 async def take_snapshot(page: Page) -> list[Element]:

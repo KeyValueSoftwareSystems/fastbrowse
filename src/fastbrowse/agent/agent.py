@@ -7,7 +7,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_typesafe import Choice, Noul, NoulCriteria, Question
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
-from langgraph.graph import START, StateGraph
+from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.runtime import Runtime
 from langgraph.types import Command
@@ -18,14 +18,15 @@ from pydantic import BaseModel
 from fastbrowse.adapter.llm import llm
 from fastbrowse.agent.context import BrowserContext, build_context, destroy_context
 from fastbrowse.agent.prompt import (
-    ACTION_INSTRUCTION,
+    ACT_INSTRUCTION,
+    ANSWER_SYSTEM,
+    CLICK_TARGET_INSTRUCTION,
     FILL_SYSTEM,
-    FIND_ELEMENT_INSTRUCTION,
+    FILL_TARGET_INSTRUCTION,
     NAVIGATE_INSTRUCTION,
     PLAN_ITEM_DONE_INSTRUCTION,
     PLAN_SYSTEM,
     PLAN_UPDATE_INSTRUCTION,
-    ROUTER_INSTRUCTION,
 )
 from fastbrowse.agent.snapshot import Element, take_snapshot
 from fastbrowse.agent.state import State
@@ -183,111 +184,19 @@ async def plan(state: State, runtime: Runtime[BrowserContext]) -> dict[str, Any]
     return result
 
 
-@workflow
-async def router(
-    state: State, runtime: Runtime[BrowserContext]
-) -> Command[str]:
-    """Decide the next step and route the graph accordingly."""
-    Netra.set_input(
-        {
-            "goal": state.get("current_goal", ""),
-            "plan": state.get("plan", []),
-            "observations": state.get("observations", ""),
-        }
-    )
-    route = await classify(
-        "router",
-        state,
-        "route",
-        Choice(
-            instructions=ROUTER_INSTRUCTION,
-            criteria={
-                "find_element": (
-                    "Locate the most relevant element on the current page and "
-                    "act on it."
-                ),
-                "navigate": "Go back and navigate to a different URL.",
-                "__end__": "The goal has been achieved; stop.",
-            },
-        ),
-    )
-    logger.info("router: -> %s", route)
-    Netra.set_output({"route": route})
-    return Command(goto=route)
+_MAX_TARGETS = 100
 
 
-@workflow
-async def find_element(
-    state: State, runtime: Runtime[BrowserContext]
-) -> dict[str, Any]:
-    """Binary-search the snapshot for the element most relevant to the current state."""
-    elements = state.get("elements", [])
-    Netra.set_input(
-        {
-            "goal": state.get("current_goal", ""),
-            "element_count": len(elements),
-        }
-    )
-    selected = await _search_element(state, elements)
-    result = {"selected_index": selected}
-    Netra.set_output(result)
-    return result
+def _targets(elements: list[Element], kind: str) -> dict[str, Any]:
+    """Index up to `_MAX_TARGETS` elements of `kind`, keyed by element index."""
+    selected = [element for element in elements if element.kind == kind][:_MAX_TARGETS]
+    return {str(element.index): summarize(element) for element in selected}
 
 
-async def _search_element(state: State, elements: list[Element]) -> int:
-    """Binary-search `elements` for the index most relevant to the current state."""
-    if not elements:
-        return -1
-
-    candidates: list[Element] = list(elements)
-    step = 0
-
-    while len(candidates) > 1:
-        step += 1
-        mid = len(candidates) // 2
-        top = candidates[:mid]
-        bottom = candidates[mid:]
-
-        chosen = await classify(
-            f"find_element[{step}]",
-            state,
-            "half",
-            Choice(
-                instructions=FIND_ELEMENT_INSTRUCTION,
-                criteria={
-                    "none": "No element on the page is relevant; stop.",
-                    "top": {
-                        "half": "first half",
-                        "elements": [summarize(element) for element in top],
-                    },
-                    "bottom": {
-                        "half": "second half",
-                        "elements": [summarize(element) for element in bottom],
-                    },
-                },
-            ),
-            extra={
-                "candidates": [summarize(element) for element in candidates]
-            },
-        )
-        logger.info(
-            "find_element: step %d candidates=%d -> %s",
-            step,
-            len(candidates),
-            chosen,
-        )
-        if chosen == "none":
-            logger.info("find_element: no relevant element")
-            return -1
-        if chosen == "bottom":
-            candidates = bottom
-        else:
-            candidates = top
-
-    if len(candidates) == 1:
-        logger.info("find_element: selected index=%d", candidates[0].index)
-        return candidates[0].index
-    return -1
+def _element_by_index(elements: list[Element], chosen: str) -> Element:
+    """Return the element whose index matches a `Choice` key."""
+    index = int(chosen)
+    return next(element for element in elements if element.index == index)
 
 
 async def _fill_text(state: State, element: Element) -> str:
@@ -306,78 +215,113 @@ async def _fill_text(state: State, element: Element) -> str:
     return str(response.content)
 
 
-async def _run_action(
-    state: State,
-    runtime: Runtime[BrowserContext],
-    element: Element | None,
-    tool_name: str,
-) -> str:
-    """Run the chosen tool against the page and return its result string."""
-    page = runtime.context["page"]
-    if tool_name == "click" and element is not None:
-        return await click(page, element.selector, frame_index=element.frame_index)
-    if tool_name == "fill" and element is not None:
-        value = await _fill_text(state, element)
-        return await fill(
-            page, element.selector, value, frame_index=element.frame_index
-        )
-    if tool_name == "scroll":
-        return await scroll(page, 600)
-    return "No action taken."
-
-
 @workflow
-async def action(state: State, runtime: Runtime[BrowserContext]) -> dict[str, Any]:
-    """Pick a tool for the selected element, run it, and record an observation."""
+async def act(state: State, runtime: Runtime[BrowserContext]) -> Command[str]:
+    """Choose one operation and its target in a single request, then execute it."""
     elements = state.get("elements", [])
-    index = state.get("selected_index", -1)
-    element = next((e for e in elements if e.index == index), None)
+    click_targets = _targets(elements, "click")
+    fill_targets = _targets(elements, "fill")
+
+    criteria: dict[str, Any] = {
+        "navigate": "Go back and navigate to a different URL.",
+        "scroll": "Scroll the page to reveal more content.",
+        "answer": "The task is complete; produce the final answer.",
+    }
+    if click_targets:
+        criteria["click"] = "Click one of the clickable elements."
+    if fill_targets:
+        criteria["fill"] = "Type text into one of the fields."
+
+    questions: dict[str, Question] = {
+        "route": Choice(instructions=ACT_INSTRUCTION, criteria=criteria)
+    }
+    if click_targets:
+        questions["click_target"] = Choice(
+            instructions=CLICK_TARGET_INSTRUCTION, criteria=click_targets
+        )
+    if fill_targets:
+        questions["fill_target"] = Choice(
+            instructions=FILL_TARGET_INSTRUCTION, criteria=fill_targets
+        )
+
     Netra.set_input(
         {
             "goal": state.get("current_goal", ""),
-            "selected_index": index,
-            "element": summarize(element) if element else None,
+            "plan": state.get("plan", []),
+            "element_count": len(elements),
+            "click_targets": len(click_targets),
+            "fill_targets": len(fill_targets),
+            "criteria": questions["route"]
         }
     )
 
-    tool_name = await classify(
-        "action",
-        state,
-        "tool",
-        Choice(
-            instructions=ACTION_INSTRUCTION,
-            criteria={
-                "click": "Click the selected element.",
-                "fill": "Type text into the selected element.",
-                "scroll": "Scroll the page.",
-                "none": "Take no action.",
-            },
-        ),
-        extra={"element": element.model_dump() if element else None},
-    )
+    response = await ask("act", state, questions)
+    route = str(response.choices["route"].choice)
+    logger.info("act: route=%s", route)
 
-    result: dict[str, Any]
-    if tool_name in ("click", "fill") and element is None:
-        note = f"{tool_name} skipped: no element selected"
-        logger.info("action: %s", note)
-        result = {"observations": append(state.get("observations", ""), note)}
-        observation = note
+    if route == "navigate":
+        Netra.set_output({"route": route})
+        return Command(goto="navigate")
+    if route == "answer":
+        Netra.set_output({"route": route})
+        return Command(goto="answer")
+
+    page = runtime.context["page"]
+    if route == "click" and click_targets:
+        element = _element_by_index(elements, str(response.choices["click_target"].choice))
+        clicked = await click(page, element.selector, frame_index=element.frame_index)
+        observation = f"click -> {clicked}"
+    elif route == "fill" and fill_targets:
+        element = _element_by_index(elements, str(response.choices["fill_target"].choice))
+        value = await _fill_text(state, element)
+        filled = await fill(page, element.selector, value, frame_index=element.frame_index)
+        observation = f"fill -> {filled}"
     else:
-        tool_result = await _run_action(state, runtime, element, tool_name)
-        observation = f"{tool_name} -> {tool_result}"
-        logger.info("action: %s", observation)
-        result = {
+        scrolled = await scroll(page, 600)
+        observation = f"scroll -> {scrolled}"
+
+    logger.info("act: %s", observation)
+    Netra.set_output({"route": route, "observation": observation})
+    return Command(
+        goto="snapshot",
+        update={
             "observations": append(state.get("observations", ""), observation),
             "messages": [AIMessage(content=observation)],
-        }
+        },
+    )
 
-    Netra.set_output({"observation": observation})
-    return result
+
+@workflow
+async def answer(state: State, runtime: Runtime[BrowserContext]) -> dict[str, Any]:
+    """Generate the final answer from the current state, then end the run."""
+    Netra.set_input(
+        {
+            "goal": state.get("current_goal", ""),
+            "observations": state.get("observations", ""),
+        }
+    )
+    response = await llm().ainvoke(
+        [
+            SystemMessage(content=ANSWER_SYSTEM),
+            HumanMessage(
+                content=(
+                    f"Goal: {state.get('current_goal', '')}\n"
+                    f"Observations:\n{state.get('observations', '')}\n"
+                    f"Page text:\n{state.get('snapshot', '')}"
+                )
+            ),
+        ]
+    )
+    text = str(response.content)
+    logger.info("answer: %r", text)
+    Netra.set_output({"answer": text})
+    return {"answer": text, "messages": [AIMessage(content=text)]}
 
 
 _checkpointer = InMemorySaver(
     serde=JsonPlusSerializer(allowed_msgpack_modules=[Element])
 )
+
 
 def build_graph() -> CompiledStateGraph[State, BrowserContext, State, State]:
     """Assemble and compile the browser-agent StateGraph."""
@@ -386,18 +330,17 @@ def build_graph() -> CompiledStateGraph[State, BrowserContext, State, State]:
     graph.add_node("navigate", navigate)  # pyright: ignore[reportArgumentType]
     graph.add_node("snapshot", snapshot)  # pyright: ignore[reportArgumentType]
     graph.add_node("plan", plan)  # pyright: ignore[reportArgumentType]
-    graph.add_node("router", router)  # pyright: ignore[reportArgumentType]
-    graph.add_node("find_element", find_element)  # pyright: ignore[reportArgumentType]
-    graph.add_node("action", action)  # pyright: ignore[reportArgumentType]
+    graph.add_node("act", act)  # pyright: ignore[reportArgumentType]
+    graph.add_node("answer", answer)  # pyright: ignore[reportArgumentType]
 
     graph.add_edge(START, "navigate")
     graph.add_edge("navigate", "snapshot")
     graph.add_edge("snapshot", "plan")
-    graph.add_edge("plan", "router")
-    graph.add_edge("find_element", "action")
-    graph.add_edge("action", "snapshot")
+    graph.add_edge("plan", "act")
+    graph.add_edge("answer", END)
 
     return graph.compile(checkpointer=_checkpointer)
+
 
 @workflow(name="Fastbrowse")
 async def run(prompt: str, url: str, *, headless: bool = True) -> dict[str, Any]:
