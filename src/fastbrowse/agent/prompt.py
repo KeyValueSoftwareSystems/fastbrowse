@@ -35,3 +35,13 @@ FIND_ELEMENT_INSTRUCTION = (
 ACTION_INSTRUCTION = (
     "Which action should be performed on the selected element (or the page)?"
 )
+
+PLAN_UPDATE_INSTRUCTION = (
+    "Given the task, the current plan, and the observations so far, does the plan "
+    "need to be rewritten (for example because the goal is complete or new "
+    "information invalidates the plan)?"
+)
+
+PLAN_ITEM_DONE_INSTRUCTION = (
+    "Has the following plan item been completed, based on the observations?\n{item}"
+)

@@ -4,7 +4,7 @@ import uuid
 from typing import Any, cast
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
-from langchain_typesafe import Choice
+from langchain_typesafe import Choice, Noul, NoulCriteria, Question
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from langgraph.graph import START, StateGraph
@@ -20,16 +20,22 @@ from fastbrowse.agent.prompt import (
     FILL_SYSTEM,
     FIND_ELEMENT_INSTRUCTION,
     NAVIGATE_INSTRUCTION,
+    PLAN_ITEM_DONE_INSTRUCTION,
     PLAN_SYSTEM,
+    PLAN_UPDATE_INSTRUCTION,
     ROUTER_INSTRUCTION,
 )
 from fastbrowse.agent.snapshot import Element, take_snapshot
 from fastbrowse.agent.state import State
 from fastbrowse.agent.tools import click, fill, goto, scroll
-from fastbrowse.agent.utils import append, classify, summarize
+from fastbrowse.agent.utils import append, ask, classify, summarize
 from fastbrowse.logging import get_logger, setup_logging
 
 logger = get_logger("agent")
+
+# Decision thresholds for the planning loop.
+UPDATE_T = 0.6  # noul probability above which the plan is rewritten by the LLM
+DONE_T = 0.5  # noul probability above which a plan item counts as completed
 
 
 class PlanUpdate(BaseModel):
@@ -86,8 +92,8 @@ async def snapshot(state: State, runtime: Runtime[BrowserContext]) -> dict[str, 
     return {"snapshot": aria, "elements": elements}
 
 
-async def plan(state: State, runtime: Runtime[BrowserContext]) -> dict[str, Any]:
-    """(Re)build the plan and current goal from the task and observations."""
+async def _generate_plan(state: State) -> dict[str, Any]:
+    """Build a fresh plan and current goal from the task and observations (LLM)."""
     update = cast(
         PlanUpdate,
         await llm().with_structured_output(PlanUpdate).ainvoke(
@@ -106,6 +112,53 @@ async def plan(state: State, runtime: Runtime[BrowserContext]) -> dict[str, Any]
     )
     logger.info("plan: goal=%r plan=%r", update.current_goal, update.plan)
     return {"plan": update.plan, "current_goal": update.current_goal}
+
+
+def _next_goal(plan_items: list[str], completed: list[bool]) -> str:
+    """Return the item after the latest completed one, or "" if all are done."""
+    last = max((i for i, done in enumerate(completed) if done), default=-1)
+    nxt = last + 1
+    return plan_items[nxt] if nxt < len(plan_items) else ""
+
+
+async def plan(state: State, runtime: Runtime[BrowserContext]) -> dict[str, Any]:
+    """Advance the plan: rewrite it when needed, otherwise move to the next goal."""
+    plan_items = state.get("plan", [])
+    if not plan_items:
+        return await _generate_plan(state)
+
+    questions: dict[str, Question] = {
+        "needs_update": Noul(
+            instructions=PLAN_UPDATE_INSTRUCTION,
+            criteria=NoulCriteria(
+                true="The plan must be rewritten.",
+                false="The plan still holds.",
+            ),
+        ),
+        **{
+            f"done_{i}": Noul(
+                instructions=PLAN_ITEM_DONE_INSTRUCTION.format(item=item),
+                criteria=NoulCriteria(
+                    true="The item is completed.",
+                    false="The item is not completed.",
+                ),
+            )
+            for i, item in enumerate(plan_items)
+        },
+    }
+    response = await ask("plan", state, questions)
+
+    if response.nouls["needs_update"].noul >= UPDATE_T:
+        logger.info("plan: needs update, rewriting")
+        return await _generate_plan(state)
+
+    completed = [
+        response.nouls[f"done_{i}"].noul >= DONE_T
+        for i in range(len(plan_items))
+    ]
+    goal = _next_goal(plan_items, completed)
+    logger.info("plan: completed=%s goal=%r", completed, goal)
+    return {"current_goal": goal}
 
 
 async def router(

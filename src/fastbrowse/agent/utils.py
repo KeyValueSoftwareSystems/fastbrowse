@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from langchain_typesafe import Choice, ClassifierRequest
+from langchain_typesafe import Choice, ClassifierRequest, ClassifierResponse, Question
 
 from fastbrowse.adapter.decision import decision
 from fastbrowse.agent.snapshot import Element
@@ -40,6 +40,23 @@ def summarize(element: Element) -> dict[str, Any]:
     }
 
 
+async def ask(
+    tag: str,
+    state: State,
+    questions: dict[str, Question],
+    *,
+    extra: dict[str, Any] | None = None,
+) -> ClassifierResponse:
+    """Send one decision request (one or more questions) and return the response."""
+    request: ClassifierRequest = {
+        "state": {**decision_state(state), **(extra or {})},
+        "questions": questions,
+    }
+    response = await decision().ainvoke(request)
+    log_decision(logger, tag, request, response)
+    return response
+
+
 async def classify(
     tag: str,
     state: State,
@@ -49,10 +66,5 @@ async def classify(
     extra: dict[str, Any] | None = None,
 ) -> str:
     """Ask the decision model a single-choice question and return the chosen key."""
-    request: ClassifierRequest = {
-        "state": {**decision_state(state), **(extra or {})},
-        "questions": {question_id: choice},
-    }
-    response = await decision().ainvoke(request)
-    log_decision(logger, tag, request, response)
+    response = await ask(tag, state, {question_id: choice}, extra=extra)
     return str(response.choices[question_id].choice)
