@@ -133,11 +133,11 @@ The graph state (`agent/state.py`) is a `TypedDict`:
 
 ## Development
 
-Type checking uses `mypy` in strict mode (configured under `[tool.mypy]` in
+Type checking uses `basedpyright` (configured under `[tool.basedpyright]` in
 `pyproject.toml`):
 
 ```bash
-uv run mypy
+uv run basedpyright
 ```
 
 There is no test suite yet.

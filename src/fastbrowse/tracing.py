@@ -5,7 +5,7 @@ from netra import Netra, NetraInstruments
 from fastbrowse.config import settings
 
 
-def init_observability():
+def init_observability() -> None:
 
     os.environ["NETRA_OTLP_ENDPOINT"] = settings.netra_otlp_endpoint
     

@@ -11,8 +11,8 @@ from langgraph.graph import START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.runtime import Runtime
 from langgraph.types import Command
-from netra import Netra  # type: ignore[import-untyped]
-from netra.decorators import workflow  # type: ignore[import-untyped]
+from netra import Netra
+from netra.decorators import workflow
 from pydantic import BaseModel
 
 from fastbrowse.adapter.llm import llm
@@ -45,7 +45,7 @@ class PlanUpdate(BaseModel):
     current_goal: str
 
 
-@workflow  # type: ignore[untyped-decorator]
+@workflow
 async def navigate(state: State, runtime: Runtime[BrowserContext]) -> dict[str, Any]:
     """Navigate to a URL chosen from state, or stay on the current page."""
     page = runtime.context["page"]
@@ -85,7 +85,7 @@ async def navigate(state: State, runtime: Runtime[BrowserContext]) -> dict[str, 
     return {}
 
 
-@workflow  # type: ignore[untyped-decorator]
+@workflow
 async def snapshot(state: State, runtime: Runtime[BrowserContext]) -> dict[str, Any]:
     """Capture an aria snapshot and the interactive elements into state."""
     page = runtime.context["page"]
@@ -99,6 +99,7 @@ async def snapshot(state: State, runtime: Runtime[BrowserContext]) -> dict[str, 
 
 async def _generate_plan(state: State) -> dict[str, Any]:
     """Build a fresh plan and current goal from the task and observations (LLM)."""
+    elements = state.get("elements", [])
     update = cast(
         PlanUpdate,
         await llm().with_structured_output(PlanUpdate).ainvoke(
@@ -109,6 +110,9 @@ async def _generate_plan(state: State) -> dict[str, Any]:
                         f"Task: {state.get('prompt', '')}\n"
                         f"Current goal: {state.get('current_goal', '')}\n"
                         f"Current plan: {state.get('plan', [])}\n"
+                        f"Page snapshot:\n{state.get('snapshot', '')[:4000]}\n"
+                        f"Interactive elements:\n"
+                        f"{[summarize(e) for e in elements[:100]]}\n"
                         f"Observations:\n{state.get('observations', '')}"
                     )
                 ),
@@ -126,7 +130,7 @@ def _next_goal(plan_items: list[str], completed: list[bool]) -> str:
     return plan_items[nxt] if nxt < len(plan_items) else ""
 
 
-@workflow  # type: ignore[untyped-decorator]
+@workflow
 async def plan(state: State, runtime: Runtime[BrowserContext]) -> dict[str, Any]:
     """Advance the plan: rewrite it when needed, otherwise move to the next goal."""
     plan_items = state.get("plan", [])
@@ -179,7 +183,7 @@ async def plan(state: State, runtime: Runtime[BrowserContext]) -> dict[str, Any]
     return result
 
 
-@workflow  # type: ignore[untyped-decorator]
+@workflow
 async def router(
     state: State, runtime: Runtime[BrowserContext]
 ) -> Command[str]:
@@ -212,7 +216,7 @@ async def router(
     return Command(goto=route)
 
 
-@workflow  # type: ignore[untyped-decorator]
+@workflow
 async def find_element(
     state: State, runtime: Runtime[BrowserContext]
 ) -> dict[str, Any]:
@@ -322,7 +326,7 @@ async def _run_action(
     return "No action taken."
 
 
-@workflow  # type: ignore[untyped-decorator]
+@workflow
 async def action(state: State, runtime: Runtime[BrowserContext]) -> dict[str, Any]:
     """Pick a tool for the selected element, run it, and record an observation."""
     elements = state.get("elements", [])
@@ -379,12 +383,12 @@ def build_graph() -> CompiledStateGraph[State, BrowserContext, State, State]:
     """Assemble and compile the browser-agent StateGraph."""
     graph = StateGraph(State, context_schema=BrowserContext)
 
-    graph.add_node("navigate", navigate) #type: ignore
-    graph.add_node("snapshot", snapshot) #type: ignore
-    graph.add_node("plan", plan) #type: ignore
-    graph.add_node("router", router) #type: ignore
-    graph.add_node("find_element", find_element) #type: ignore
-    graph.add_node("action", action) #type: ignore
+    graph.add_node("navigate", navigate)  # pyright: ignore[reportArgumentType]
+    graph.add_node("snapshot", snapshot)  # pyright: ignore[reportArgumentType]
+    graph.add_node("plan", plan)  # pyright: ignore[reportArgumentType]
+    graph.add_node("router", router)  # pyright: ignore[reportArgumentType]
+    graph.add_node("find_element", find_element)  # pyright: ignore[reportArgumentType]
+    graph.add_node("action", action)  # pyright: ignore[reportArgumentType]
 
     graph.add_edge(START, "navigate")
     graph.add_edge("navigate", "snapshot")

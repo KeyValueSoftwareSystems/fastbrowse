@@ -20,12 +20,11 @@ dependencies = [
 fastbrowse = "fastbrowse:main"
 
 [dependency-groups]
-dev = ["mypy>=2.4.0"]
+dev = ["basedpyright>=1.40.2"]
 
-[tool.mypy]
-python_version = "3.12"
-files = ["src"]
-strict = true
+[tool.basedpyright]
+include = ["src"]
+typeCheckingMode = "standard"
 
 [build-system]
 requires = ["uv_build>=0.12.2,<0.13.0"]
