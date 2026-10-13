@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import json
+from typing import Any, cast
 
-from playwright.async_api import Frame, Page
+from playwright.async_api import Frame, Locator, Page
 from pydantic import BaseModel
 
 from fastbrowse.logging import get_logger
@@ -89,14 +90,15 @@ async def take_snapshot(page: Page) -> list[Element]:
     return elements
 
 
-async def _snapshot_frame(frame: Frame) -> list[dict]:
+async def _snapshot_frame(frame: Frame) -> list[dict[str, Any]]:
     try:
-        return await frame.evaluate(_SNAPSHOT_SCRIPT)
+        raw = await frame.evaluate(_SNAPSHOT_SCRIPT)
+        return cast("list[dict[str, Any]]", raw)
     except Exception:  # noqa: BLE001 - skip frames that cannot be evaluated
         return []
 
 
-def frame_locator(page: Page, element: Element):
+def frame_locator(page: Page, element: Element) -> Locator:
     """Return a Playwright locator for the element's selector within its frame."""
     if element.frame_index and element.frame_index < len(page.frames):
         return page.frames[element.frame_index].locator(element.selector)

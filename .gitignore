@@ -11,3 +11,4 @@ wheels/
 
 # Environment variables (real secrets)
 .env
+.mypy_cache

@@ -6,7 +6,7 @@ from fastbrowse.config import settings
 
 
 @lru_cache
-def decision():
+def decision() -> TypeSafeClassifier:
     return TypeSafeClassifier(
         api_key=settings.typesafe_api_key,
         base_url=settings.typesafe_base_url,

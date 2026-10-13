@@ -7,7 +7,7 @@ from fastbrowse.config import settings
 
 
 @lru_cache
-def llm():
+def llm() -> ChatOpenAI:
     return ChatOpenAI(
         api_key=SecretStr(settings.openai_api_key),
         base_url=settings.openai_base_url,

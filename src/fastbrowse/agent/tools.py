@@ -1,158 +1,111 @@
+"""Browser actions used by the agent graph.
+
+Each function takes a Playwright ``Page`` directly so graph nodes can call them
+without tool-call plumbing.
+"""
+
 from __future__ import annotations
 
 import json
 from typing import Literal
 
-from langchain_core.tools import tool
-from langgraph.prebuilt import ToolRuntime
+from playwright.async_api import Locator, Page
 
-from fastbrowse.agent.context import BrowserContext
-from fastbrowse.agent.state import State
 from fastbrowse.logging import get_logger
 
 logger = get_logger("tools")
 
 
-@tool
-async def navigate(url: str, runtime: ToolRuntime[BrowserContext, State]) -> str:
-    """Navigate the browser to `url` and wait for the page to load."""
-    logger.debug("navigate(%s)", url)
-    page = runtime.context["page"]
-    await page.goto(url, wait_until="load")
-    return f"Navigated to {page.url} | title: {await page.title()}"
-
-
-@tool
-async def get_page_text(runtime: ToolRuntime[BrowserContext, State]) -> str:
-    """Return the visible text of the current page."""
-    logger.debug("get_page_text()")
-    return await runtime.context["page"].inner_text("body")
-
-
-@tool
-async def get_page_url(runtime: ToolRuntime[BrowserContext, State]) -> str:
-    """Return the current page URL and title."""
-    logger.debug("get_page_url()")
-    page = runtime.context["page"]
-    return f"{page.url}\n{await page.title()}"
-
-
-def _locator(page, selector: str, frame_index: int = 0):
+def _locator(page: Page, selector: str, frame_index: int = 0) -> Locator:
     """Resolve a locator, piercing into the given frame when frame_index > 0."""
     if frame_index and frame_index < len(page.frames):
         return page.frames[frame_index].locator(selector).first
     return page.locator(selector).first
 
 
-@tool
-async def click_element(
-    selector: str, runtime: ToolRuntime[BrowserContext, State], frame_index: int = 0
-) -> str:
-    """Click the first element matching the CSS `selector` (optionally inside `frame_index`)."""
-    logger.debug("click_element(%s, frame_index=%d)", selector, frame_index)
-    page = runtime.context["page"]
+async def goto(page: Page, url: str) -> str:
+    """Navigate `page` to `url` and wait for load."""
+    logger.debug("goto(%s)", url)
+    await page.goto(url, wait_until="load")
+    return f"Navigated to {page.url} | title: {await page.title()}"
+
+
+async def page_text(page: Page) -> str:
+    """Return the visible text of `page`."""
+    logger.debug("page_text()")
+    return await page.inner_text("body")
+
+
+async def page_url(page: Page) -> str:
+    """Return `page`'s URL and title."""
+    logger.debug("page_url()")
+    return f"{page.url}\n{await page.title()}"
+
+
+async def click(page: Page, selector: str, frame_index: int = 0) -> str:
+    """Click the first element matching `selector` in `page`."""
+    logger.debug("click(%s, frame_index=%d)", selector, frame_index)
     await _locator(page, selector, frame_index).click()
     return f"Clicked: {selector}"
 
 
-@tool
-async def fill_input(
-    selector: str,
-    value: str,
-    runtime: ToolRuntime[BrowserContext, State],
-    frame_index: int = 0,
-) -> str:
-    """Fill the form field matching the CSS `selector` (optionally inside `frame_index`) with `value`."""
-    logger.debug("fill_input(%s, frame_index=%d)", selector, frame_index)
-    page = runtime.context["page"]
+async def fill(page: Page, selector: str, value: str, frame_index: int = 0) -> str:
+    """Fill the field matching `selector` with `value`."""
+    logger.debug("fill(%s, frame_index=%d)", selector, frame_index)
     await _locator(page, selector, frame_index).fill(value)
     return f"Filled {selector} with '{value}'"
 
 
-@tool
-async def scroll_page(delta_y: int, runtime: ToolRuntime[BrowserContext, State]) -> str:
-    """Scroll the page vertically by `delta_y` pixels (positive scrolls down)."""
-    logger.debug("scroll_page(%d)", delta_y)
-    page = runtime.context["page"]
+async def scroll(page: Page, delta_y: int) -> str:
+    """Scroll `page` vertically by `delta_y` pixels."""
+    logger.debug("scroll(%d)", delta_y)
     await page.evaluate("(dy) => window.scrollBy(0, dy)", delta_y)
     return f"Scrolled by {delta_y}px"
 
 
-@tool
-async def screenshot(runtime: ToolRuntime[BrowserContext, State]) -> str:
+async def take_screenshot(page: Page) -> str:
     """Take a full-page screenshot and return its file path."""
-    logger.debug("screenshot()")
-    page = runtime.context["page"]
+    logger.debug("take_screenshot()")
     path = "/tmp/fastbrowse_screenshot.png"
     await page.screenshot(path=path, full_page=True)
     return f"Screenshot saved to {path}"
 
 
-@tool
-async def get_cookies(runtime: ToolRuntime[BrowserContext, State]) -> str:
-    """Return all cookies for the current page."""
-    logger.debug("get_cookies()")
-    cookies = await runtime.context["page"].context.cookies()
+async def read_cookies(page: Page) -> str:
+    """Return all cookies for the current page as JSON."""
+    logger.debug("read_cookies()")
+    cookies = await page.context.cookies()
     return json.dumps(cookies, ensure_ascii=False)
 
 
-@tool
-async def set_cookie(
-    name: str, value: str, url: str, runtime: ToolRuntime[BrowserContext, State]
-) -> str:
+async def write_cookie(page: Page, name: str, value: str, url: str) -> str:
     """Set a cookie `name=value` for `url` on the current session."""
-    logger.debug("set_cookie(%s, url=%s)", name, url)
-    await runtime.context["page"].context.add_cookies(
-        [{"name": name, "value": value, "url": url}]
-    )
+    logger.debug("write_cookie(%s, url=%s)", name, url)
+    await page.context.add_cookies([{"name": name, "value": value, "url": url}])
     return f"Set cookie {name}={value} for {url}"
 
 
-@tool
-async def api_request(
+async def send_request(
+    page: Page,
     method: Literal["GET", "POST", "PUT", "DELETE", "PATCH"],
     url: str,
-    runtime: ToolRuntime[BrowserContext, State],
     body: str | None = None,
 ) -> str:
-    """Issue an HTTP `method` request to `url` (optionally with a JSON `body`) using the page's session."""
-    logger.debug("api_request(%s, %s)", method, url)
-    page = runtime.context["page"]
+    """Issue an HTTP `method` request to `url` using the page's session."""
+    logger.debug("send_request(%s, %s)", method, url)
     resp = await page.request.fetch(url, method=method, data=body or None)
     return f"{resp.status} {resp.status_text}\n{await resp.text()}"
 
 
-@tool
-async def get_local_storage(runtime: ToolRuntime[BrowserContext, State]) -> str:
+async def read_local_storage(page: Page) -> str:
     """Return the current origin's localStorage as JSON."""
-    logger.debug("get_local_storage()")
-    data = await runtime.context["page"].evaluate("() => JSON.stringify(localStorage)")
+    logger.debug("read_local_storage()")
+    data = await page.evaluate("() => JSON.stringify(localStorage)")
     return str(data)
 
 
-@tool
-async def set_local_storage(
-    key: str, value: str, runtime: ToolRuntime[BrowserContext, State]
-) -> str:
+async def write_local_storage(page: Page, key: str, value: str) -> str:
     """Set `key=value` in the current origin's localStorage."""
-    logger.debug("set_local_storage(%s)", key)
-    await runtime.context["page"].evaluate(
-        "([k, v]) => localStorage.setItem(k, v)", [key, value]
-    )
+    logger.debug("write_local_storage(%s)", key)
+    await page.evaluate("([k, v]) => localStorage.setItem(k, v)", [key, value])
     return f"Set localStorage {key}={value}"
-
-
-BROWSER_TOOLS = [
-    navigate,
-    get_page_text,
-    get_page_url,
-    click_element,
-    fill_input,
-    scroll_page,
-    screenshot,
-    get_cookies,
-    set_cookie,
-    api_request,
-    get_local_storage,
-    set_local_storage,
-]

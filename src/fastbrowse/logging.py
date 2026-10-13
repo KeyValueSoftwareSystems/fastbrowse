@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Any, Mapping
 
 _FORMAT = "%(asctime)s %(levelname)-8s %(name)s %(message)s"
 
@@ -21,7 +22,9 @@ def setup_logging(*, level: int = logging.INFO) -> None:
     logger.propagate = False
 
 
-def log_decision(logger: logging.Logger, tag: str, request: dict, response) -> None:
+def log_decision(
+    logger: logging.Logger, tag: str, request: Mapping[str, Any], response: Any
+) -> None:
     """Log a full decision payload (questions + response) at INFO."""
     logger.info(
         "%s decision | question=%s | response=%s",
