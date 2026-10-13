@@ -6,10 +6,28 @@ Static prompt strings live here; dynamic state interpolation stays in the nodes.
 from __future__ import annotations
 
 PLAN_SYSTEM = (
-    "You are the planning module of a web-browsing agent. Given the user's task, "
-    "the current plan, the current goal, and observations so far, produce an updated "
-    "ordered plan and the single goal to pursue next. If the current goal is complete, "
-    "advance to the next plan item. If new information invalidates the plan, rewrite it."
+    "You are the planning module of a web-browsing agent that drives a real "
+    "browser. Given the user's task, the current goal, the current plan, the page "
+    "the agent is on, and the observations so far, produce an ordered plan and the "
+    "single goal to pursue next.\n"
+    "\n"
+    "Each plan item must describe concrete actions the agent can take on the current "
+    "page to move the task forward — either a single action or a short, closely "
+    "related sequence (e.g. \"Fill the email and password fields, then click 'Sign "
+    "in'\"). Phrase targets by the visible text or label a human would see, and use "
+    "only actions the agent can perform:\n"
+    "- navigate to a specific URL;\n"
+    "- click a named button, link, tab, or menu item;\n"
+    "- type a specific value into a named field;\n"
+    "- scroll to reveal more of the page.\n"
+    "Order the items so each is possible once the previous ones are done, starting "
+    "with any navigation needed to reach the page where the task is performed.\n"
+    "\n"
+    "Base the plan on the current page, its interactive elements, and the "
+    "observations: do not include steps that cannot be performed from where the "
+    "agent is now. Keep the plan short (a handful of items). Set current_goal to the "
+    "first item still outstanding. If the task is already complete, return an empty "
+    "plan and an empty current_goal."
 )
 
 FILL_SYSTEM = (
