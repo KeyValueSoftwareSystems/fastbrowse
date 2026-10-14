@@ -24,7 +24,7 @@ from fastbrowse.agent.prompt import (
     FILL_SYSTEM,
     FILL_TARGET_INSTRUCTION,
     NAVIGATE_INSTRUCTION,
-    PLAN_ITEM_DONE_INSTRUCTION,
+    PLAN_GOAL_INSTRUCTION,
     PLAN_SYSTEM,
     PLAN_UPDATE_INSTRUCTION,
 )
@@ -38,12 +38,13 @@ logger = get_logger("agent")
 
 # Decision thresholds for the planning loop.
 UPDATE_T = 0.6  # noul probability above which the plan is rewritten by the LLM
-DONE_T = 0.5  # noul probability above which a plan item counts as completed
+
+# Reserved Choice key the goal selector returns once every plan item is done.
+_COMPLETE = "✓ complete"
 
 
 class PlanUpdate(BaseModel):
     plan: list[str]
-    current_goal: str
 
 
 @workflow
@@ -98,8 +99,8 @@ async def snapshot(state: State, runtime: Runtime[BrowserContext]) -> dict[str, 
     return {"snapshot": aria, "elements": elements}
 
 
-async def _generate_plan(state: State) -> dict[str, Any]:
-    """Build a fresh plan and current goal from the task and observations (LLM)."""
+async def _generate_plan(state: State) -> list[str]:
+    """Build a fresh ordered plan from the task, page, and observations (LLM)."""
     elements = state.get("elements", [])
     update = cast(
         PlanUpdate,
@@ -120,20 +121,36 @@ async def _generate_plan(state: State) -> dict[str, Any]:
             ]
         ),
     )
-    logger.info("plan: goal=%r plan=%r", update.current_goal, update.plan)
-    return {"plan": update.plan, "current_goal": update.current_goal}
+    logger.info("plan: generated %d items", len(update.plan))
+    return update.plan
 
 
-def _next_goal(plan_items: list[str], completed: list[bool]) -> str:
-    """Return the item after the latest completed one, or "" if all are done."""
-    last = max((i for i, done in enumerate(completed) if done), default=-1)
-    nxt = last + 1
-    return plan_items[nxt] if nxt < len(plan_items) else ""
+def _goal_criteria(plan_items: list[str]) -> dict[str, Any]:
+    """Goal-selector criteria keyed by unique plan item text, plus a completion key."""
+    return {
+        **{item: f"Pursue: {item}" for item in dict.fromkeys(plan_items)},
+        _COMPLETE: "All plan items are done and the task is complete.",
+    }
+
+
+async def _select_goal(state: State, plan_items: list[str]) -> str:
+    """Ask jev which plan item is the current goal; "" when done or no plan."""
+    items = list(dict.fromkeys(plan_items))
+    if not items:
+        return ""
+    chosen = await classify(
+        "plan_goal",
+        state,
+        "goal",
+        Choice(instructions=PLAN_GOAL_INSTRUCTION, criteria=_goal_criteria(items)),
+        extra={"plan": items},
+    )
+    return "" if chosen == _COMPLETE else chosen
 
 
 @workflow
 async def plan(state: State, runtime: Runtime[BrowserContext]) -> dict[str, Any]:
-    """Advance the plan: rewrite it when needed, otherwise move to the next goal."""
+    """Advance the plan: rewrite it when needed, otherwise select the current goal."""
     plan_items = state.get("plan", [])
     Netra.set_input(
         {
@@ -145,7 +162,11 @@ async def plan(state: State, runtime: Runtime[BrowserContext]) -> dict[str, Any]
     )
 
     if not plan_items:
-        result = await _generate_plan(state)
+        new_plan = await _generate_plan(state)
+        result: dict[str, Any] = {
+            "plan": new_plan,
+            "current_goal": await _select_goal(state, new_plan),
+        }
     else:
         questions: dict[str, Question] = {
             "needs_update": Noul(
@@ -155,30 +176,27 @@ async def plan(state: State, runtime: Runtime[BrowserContext]) -> dict[str, Any]
                     false="The plan still holds.",
                 ),
             ),
-            **{
-                f"done_{i}": Noul(
-                    instructions=PLAN_ITEM_DONE_INSTRUCTION.format(item=item),
-                    criteria=NoulCriteria(
-                        true="The item is completed.",
-                        false="The item is not completed.",
-                    ),
-                )
-                for i, item in enumerate(plan_items)
-            },
+            "goal": Choice(
+                instructions=PLAN_GOAL_INSTRUCTION,
+                criteria=_goal_criteria(plan_items),
+            ),
         }
         response = await ask("plan", state, questions)
 
         if response.nouls["needs_update"].noul >= UPDATE_T:
             logger.info("plan: needs update, rewriting")
-            result = await _generate_plan(state)
+            new_plan = await _generate_plan(state)
+            result = {
+                "plan": new_plan,
+                "current_goal": await _select_goal(state, new_plan),
+            }
         else:
-            completed = [
-                response.nouls[f"done_{i}"].noul >= DONE_T
-                for i in range(len(plan_items))
-            ]
-            goal = _next_goal(plan_items, completed)
-            logger.info("plan: completed=%s goal=%r", completed, goal)
-            result = {"current_goal": goal}
+            chosen = str(response.choices["goal"].choice)
+            logger.info("plan: goal=%r", chosen)
+            if chosen == _COMPLETE:
+                result = {"plan": [], "current_goal": ""}
+            else:
+                result = {"current_goal": chosen}
 
     Netra.set_output(result)
     return result

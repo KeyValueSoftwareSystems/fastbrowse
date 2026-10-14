@@ -8,8 +8,8 @@ from __future__ import annotations
 PLAN_SYSTEM = (
     "You are the planning module of a web-browsing agent that drives a real "
     "browser. Given the user's task, the current goal, the current plan, the page "
-    "the agent is on, and the observations so far, produce an ordered plan and the "
-    "single goal to pursue next.\n"
+    "the agent is on, and the observations so far, produce an ordered plan of the "
+    "actions still to perform.\n"
     "\n"
     "Each plan item must describe concrete actions the agent can take on the current "
     "page to move the task forward — either a single action or a short, closely "
@@ -25,9 +25,8 @@ PLAN_SYSTEM = (
     "\n"
     "Base the plan on the current page, its interactive elements, and the "
     "observations: do not include steps that cannot be performed from where the "
-    "agent is now. Keep the plan short (a handful of items). Set current_goal to the "
-    "first item still outstanding. If the task is already complete, return an empty "
-    "plan and an empty current_goal."
+    "agent is now. Keep the plan short (a handful of items). If the task is already "
+    "complete, return an empty plan."
 )
 
 FILL_SYSTEM = (
@@ -62,8 +61,10 @@ PLAN_UPDATE_INSTRUCTION = (
     "information invalidates the plan)?"
 )
 
-PLAN_ITEM_DONE_INSTRUCTION = (
-    "Has the following plan item been completed, based on the observations?\n{item}"
+PLAN_GOAL_INSTRUCTION = (
+    "Which plan item is the current goal to pursue next, given the task, plan, and "
+    "observations? Choose one of the offered plan items, or '✓ complete' if every "
+    "item is done."
 )
 
 ANSWER_SYSTEM = (
