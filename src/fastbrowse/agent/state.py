@@ -15,6 +15,10 @@ class State(TypedDict):
     current_goal: str
     observations: str
     prompt: str
+    current_url: str
+    steps: int
+    stall: int
+    failures: int
     snapshot: str
     elements: list[Element]
     answer: str

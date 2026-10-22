@@ -15,7 +15,14 @@ _INTERACTIVE_SELECTOR = "a, button, input, textarea, select, [role='button'], [r
 _SNAPSHOT_SCRIPT = f"""
 () => {{
   const sel = {json.dumps(_INTERACTIVE_SELECTOR)};
-  const nodes = Array.from(document.querySelectorAll(sel));
+  function isVisible(el) {{
+    const style = getComputedStyle(el);
+    if (style.display === 'none' || style.visibility === 'hidden') return false;
+    if (el.closest('[aria-hidden="true"]')) return false;
+    if (el.getClientRects().length === 0) return false;
+    const rect = el.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+  }}
   function cssPath(el) {{
     if (el.id) return '#' + CSS.escape(el.id);
     const tid = el.getAttribute('data-testid');
@@ -44,19 +51,30 @@ _SNAPSHOT_SCRIPT = f"""
     if (el.isContentEditable) return 'fill';
     return 'click';
   }}
-  return nodes.map((el) => ({{
-    tag: el.tagName.toLowerCase(),
-    selector: cssPath(el),
-    text: (
-      el.innerText ||
-      el.value ||
-      el.getAttribute('placeholder') ||
-      el.getAttribute('aria-label') ||
-      ''
-    ).trim().slice(0, 200) || null,
-    role: el.getAttribute('role'),
-    kind: actionKind(el),
-  }}));
+  const seen = new Set();
+  const out = [];
+  for (const el of document.querySelectorAll(sel)) {{
+    if (el.disabled || !isVisible(el)) continue;
+    // Hidden duplicates (e.g. a cookie banner mirroring its modal) share the
+    // generated selector, so keep only the first actionable node.
+    const selector = cssPath(el);
+    if (seen.has(selector)) continue;
+    seen.add(selector);
+    out.push({{
+      tag: el.tagName.toLowerCase(),
+      selector,
+      text: (
+        el.innerText ||
+        el.value ||
+        el.getAttribute('placeholder') ||
+        el.getAttribute('aria-label') ||
+        ''
+      ).trim().slice(0, 200) || null,
+      role: el.getAttribute('role'),
+      kind: actionKind(el),
+    }});
+  }}
+  return out;
 }}
 """
 

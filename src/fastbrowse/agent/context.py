@@ -37,13 +37,23 @@ async def build_context(*, headless: bool = True) -> BrowserContext:
 
 
 async def destroy_context(context: BrowserContext) -> None:
-    """Close the browser and stop the Playwright driver to tear down the context."""
+    """Close the browser and stop the Playwright driver to tear down the context.
+
+    Teardown is best-effort: an interrupted or already-closed run must not raise
+    here and mask the real failure.
+    """
     browser = context.get("browser")
     if browser is not None:
-        await browser.close()
+        try:
+            await browser.close()
+        except Exception:  # noqa: BLE001 - teardown must not raise
+            logger.warning("failed to close browser cleanly", exc_info=True)
     playwright = context.get("playwright")
     if playwright is not None:
-        await playwright.stop()
+        try:
+            await playwright.stop()
+        except Exception:  # noqa: BLE001 - teardown must not raise
+            logger.warning("failed to stop playwright cleanly", exc_info=True)
     logger.info("browser closed")
 
 

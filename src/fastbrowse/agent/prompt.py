@@ -19,9 +19,19 @@ PLAN_SYSTEM = (
     "- navigate to a specific URL;\n"
     "- click a named button, link, tab, or menu item;\n"
     "- type a specific value into a named field;\n"
-    "- scroll to reveal more of the page.\n"
+    "- scroll to reveal more of the page;\n"
+    "- read, set, or delete a cookie;\n"
+    "- read, write, remove, or clear localStorage / sessionStorage;\n"
+    "- send an HTTP request using the page's session;\n"
+    "- take a screenshot of the page.\n"
     "Order the items so each is possible once the previous ones are done, starting "
     "with any navigation needed to reach the page where the task is performed.\n"
+    "\n"
+    "Reading the page is not an action: the page text is already available to every "
+    "step, so never make \"read the page\" a plan item. Always end the plan with a "
+    "final item phrased as \"Answer the question using the information on the page\" "
+    "— that is how the agent produces its final answer from the page text and the "
+    "observations.\n"
     "\n"
     "Base the plan on the current page, its interactive elements, and the "
     "observations: do not include steps that cannot be performed from where the "
@@ -41,8 +51,57 @@ NAVIGATE_INSTRUCTION = (
 
 ACT_INSTRUCTION = (
     "Given the goal, plan, and observations, what should the agent do next on the "
-    "current page: click an element, type into a field, scroll, navigate to another "
-    "URL, or finish and answer?"
+    "current page: click an element, fill a form field, type text on the page "
+    "keyboard, press a single key (e.g. Enter), scroll, navigate to another URL, "
+    "read/set/delete a cookie, read/write/remove/clear localStorage or "
+    "sessionStorage, send an HTTP request with the page's session, take a "
+    "screenshot, or finish and answer?"
+)
+
+TYPE_INSTRUCTION = (
+    "Reply with the exact text to type on the page keyboard. If the goal is to "
+    "enter a guess in a word game, reply with one English word of the required "
+    "length that fits the feedback recorded in the observations. Reply with only "
+    "the text."
+)
+
+KEY_NAME_INSTRUCTION = (
+    "Reply with the name of the single key to press to serve the goal, for example "
+    "Enter, Backspace, Tab, Escape, or an arrow key. Reply with only the key name."
+)
+
+COOKIE_ACTION_INSTRUCTION = (
+    "If the next action involves cookies, which cookie operation is most relevant to "
+    "the goal: read, set, delete, or clear?"
+)
+
+STORAGE_ACTION_INSTRUCTION = (
+    "If the next action involves browser storage, which storage operation is most "
+    "relevant to the goal: read, set, remove, or clear localStorage or sessionStorage?"
+)
+
+REQUEST_METHOD_INSTRUCTION = (
+    "If the next action is to send an HTTP request, which HTTP method should be used "
+    "to best serve the goal?"
+)
+
+ARG_SYSTEM = (
+    "You generate a single argument for a browser-automation action. Reason from the "
+    "task, goal, current URL, and observations. Reply with only the exact value to use, "
+    "with no quotes, labels, or explanation. If no sensible value exists, reply with an "
+    "empty string."
+)
+
+COOKIE_NAME_INSTRUCTION = "Reply with the cookie name to operate on for the goal."
+COOKIE_VALUE_INSTRUCTION = "Reply with the cookie value to set for the goal."
+STORAGE_KEY_INSTRUCTION = "Reply with the storage key to operate on for the goal."
+STORAGE_VALUE_INSTRUCTION = "Reply with the storage value to set for the goal."
+REQUEST_URL_INSTRUCTION = (
+    "Reply with the absolute request URL to fetch for the goal (use the current URL "
+    "as the base when a relative path is needed)."
+)
+REQUEST_BODY_INSTRUCTION = (
+    "Reply with the raw request body to send for the goal, or an empty string if none."
 )
 
 CLICK_TARGET_INSTRUCTION = (
