@@ -76,6 +76,8 @@ Settings are loaded with `pydantic-settings` from the environment and `.env`.
 
 ## Usage
 
+### Command line
+
 ```bash
 uv run fastbrowse \
   --prompt "Find the price of the Pro plan" \
@@ -97,6 +99,39 @@ observations.
 | `--url` | yes | Starting URL. |
 | `--headed` | no | Show the browser window (default is headless). |
 
+### MCP server
+
+Running `fastbrowse` with no arguments starts the [FastMCP](https://gofastmcp.com/)
+server over stdio and exposes a single `browse` tool:
+
+| Argument | Required | Description |
+| --- | --- | --- |
+| `prompt` | yes | Task/goal for the agent. |
+| `url` | yes | Starting URL. |
+| `headed` | no | Show the browser window (default is headless). |
+
+The tool returns the final `answer`, the current `goal`, the `plan`, and the
+accumulated `observations`.
+
+Register it with an MCP client, for example in `.mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "fastbrowse": {
+      "command": "uv",
+      "args": ["run", "--directory", "/path/to/fastbrowse", "fastbrowse"]
+    }
+  }
+}
+```
+
+The server can also be launched directly through the FastMCP CLI:
+
+```bash
+uv run fastmcp run src/fastbrowse/mcp/server.py:mcp
+```
+
 ## Architecture
 
 ```
@@ -107,6 +142,8 @@ src/fastbrowse/
 ├── adapter/
 │   ├── llm.py          # ChatOpenAI factory
 │   └── decision.py     # TypeSafeClassifier factory
+├── mcp/
+│   └── server.py       # FastMCP server exposing the `browse` tool
 └── agent/
     ├── agent.py        # graph nodes, graph assembly, run()
     ├── helpers.py      # non-node helpers (planning, selection, actions, guards)
