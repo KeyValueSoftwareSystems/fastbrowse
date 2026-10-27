@@ -232,6 +232,7 @@ async def act(state: State, runtime: Runtime[BrowserContext]) -> Command[str]:
             goto="answer",
             update={
                 "steps": steps,
+                "stop_reason": reason,
                 "observations": append(state.get("observations", ""), observation),
                 "messages": [AIMessage(content=observation)],
             },
@@ -367,6 +368,11 @@ async def act(state: State, runtime: Runtime[BrowserContext]) -> Command[str]:
     # Failures are recorded as observations so the planner can react to them.
     failed = is_failure(observation)
     failures = 0 if not failed else failures + 1
+    # Form/keyboard actions are legitimate progress even when they do not alter
+    # the DOM structure; snapshots also detect value changes, but resetting here
+    # keeps repeated identical edits from consuming the stall budget.
+    if route in {"fill", "type", "key"} and not failed:
+        stall = 0
     logger.info("act: %s", observation)
     Netra.set_output({"route": route, "observation": observation, "steps": steps})
     return Command(
@@ -374,6 +380,7 @@ async def act(state: State, runtime: Runtime[BrowserContext]) -> Command[str]:
         update={
             "steps": steps,
             "failures": failures,
+            "stall": stall,
             "observations": append(state.get("observations", ""), observation),
             "messages": [AIMessage(content=observation)],
         },

@@ -78,6 +78,19 @@ async def page_url(page: Page) -> str:
     return f"{page.url}\n{await page.title()}"
 
 
+async def _settle(page: Page) -> None:
+    """Best-effort wait for in-flight navigation/network work after an action.
+
+    Some clicks only start an async request and route later; snapshotting
+    immediately records the old page and can make the agent think nothing
+    happened.
+    """
+    try:
+        await page.wait_for_load_state("networkidle", timeout=2000)
+    except Exception:  # noqa: BLE001 - slow long-poll connections must not block
+        pass
+
+
 async def click(page: Page, selector: str, frame_index: int = 0) -> str:
     """Click the first visible element matching `selector` in `page`.
 
@@ -88,17 +101,20 @@ async def click(page: Page, selector: str, frame_index: int = 0) -> str:
     locator = await _locator(page, selector, frame_index)
     try:
         await locator.click(timeout=ACTION_TIMEOUT)
+        await _settle(page)
         return f"Clicked: {selector}"
     except Exception:  # noqa: BLE001 - retry with the actionability checks relaxed
         pass
     try:
         await locator.scroll_into_view_if_needed(timeout=ACTION_TIMEOUT)
         await locator.click(timeout=ACTION_TIMEOUT, force=True)
+        await _settle(page)
         return f"Clicked: {selector} (forced)"
     except Exception:  # noqa: BLE001 - last resort for covered or animated nodes
         pass
     try:
         await locator.dispatch_event("click", timeout=ACTION_TIMEOUT)
+        await _settle(page)
         return f"Clicked: {selector} (dispatched)"
     except Exception as exc:  # noqa: BLE001 - report instead of raising
         return failure("click", selector, exc)
@@ -168,6 +184,7 @@ async def press_key(page: Page, key: str) -> str:
     canonical = _KEY_NAMES.get(value.lower(), value)
     try:
         await page.keyboard.press(canonical)
+        await _settle(page)
         return f"Pressed {canonical}"
     except Exception as exc:  # noqa: BLE001 - report instead of raising
         return failure("key", value, exc)

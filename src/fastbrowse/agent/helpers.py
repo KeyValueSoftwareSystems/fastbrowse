@@ -80,8 +80,13 @@ async def navigate_to(page: Page, url: str) -> str:
 def snapshot_change(state: State, url: str, elements: list[Element]) -> str | None:
     """Describe how the page changed since the last snapshot, or ``None`` if unchanged."""
     prev_url = state.get("current_url", "")
-    prev_keys = {(e.frame_index, e.selector) for e in state.get("elements", [])}
-    new_keys = {(e.frame_index, e.selector) for e in elements}
+    # Include the visible value/text in the signature: filling a form field does
+    # not change the set of selectors, but it is real progress and must reset the
+    # stall counter instead of looking like a stuck page.
+    prev_keys = {
+        (e.frame_index, e.selector, e.text) for e in state.get("elements", [])
+    }
+    new_keys = {(e.frame_index, e.selector, e.text) for e in elements}
     if not prev_keys:
         return f"snapshot -> {len(elements)} elements at {url}"
 

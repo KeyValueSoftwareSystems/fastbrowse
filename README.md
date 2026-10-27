@@ -110,8 +110,18 @@ server over stdio and exposes a single `browse` tool:
 | `url` | yes | Starting URL. |
 | `headed` | no | Show the browser window (default is headless). |
 
-The tool returns the final `answer`, the current `goal`, the `plan`, and the
-accumulated `observations`.
+The tool returns a structured result:
+
+| Field | Description |
+| --- | --- |
+| `ok` | `false` when the agent was forced to stop before finishing. |
+| `answer` | The agent's final answer. |
+| `goal` | The goal being pursued at the end of the run. |
+| `plan` | The remaining plan. |
+| `observations` | Accumulated browser action observations. |
+| `final_url` | The page URL when the run ended. |
+| `steps` | Number of act cycles executed. |
+| `stop_reason` | Why the agent was forced to stop, or `null` if it finished normally. |
 
 Register it with an MCP client, for example in `.mcp.json`:
 

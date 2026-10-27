@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Annotated, TypedDict
+from typing import Annotated, NotRequired, TypedDict
 
 from langchain_core.messages import AnyMessage
 from langgraph.graph.message import add_messages
@@ -22,3 +22,4 @@ class State(TypedDict):
     snapshot: str
     elements: list[Element]
     answer: str
+    stop_reason: NotRequired[str]
